@@ -1,0 +1,139 @@
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
+import Data.Array.Accelerate
+import Data.Array.Accelerate.LLVM.Native as CPU
+import Data.Array.Accelerate.LLVM.PTX    as PTX
+
+import Criterion.Main
+
+import qualified Prelude as P
+
+import System.Environment
+
+
+type TransmissionRate = Float
+type RecoveryRate     = Float
+type QuarantineRate   = Float
+
+
+type PassengerFlow = Int
+
+
+type SusceptiblePopulation = Int
+type InfectedPopulation    = Int
+type RecoveredPopulation   = Int
+type SIRPopulation         = ( SusceptiblePopulation
+                             , InfectedPopulation
+                             , RecoveredPopulation
+                             )
+
+globalAirports :: Int
+globalAirports = 3000
+
+maxSteps :: Int
+maxSteps = 10
+
+
+main = withArgs [] $ defaultMain
+         [ bench "CPU" $ whnf (CPU.run . outbreakN) population
+         , bench "PTX" $ whnf (PTX.run . outbreakN) population
+         ]
+  where
+    (population, outbreak) = makeOutbreak globalAirports
+    outbreakN = aiterate (constant maxSteps) outbreak
+
+
+aiterate
+  :: forall a. Arrays a
+  => Exp Int
+  -> (Acc a -> Acc a)
+  -> Acc a
+  -> Acc a
+aiterate n f z
+  = let
+      step :: Acc (Scalar Int, a) -> Acc (Scalar Int, a)
+      step v = let (i,x) = unlift v
+               in  lift (map (+1) i, f x)
+      --
+      initial :: Acc (Scalar Int, a)
+      initial = lift (unit 0, z)
+    in
+    asnd $ awhile (\v -> map (< n) (afst v)) step initial
+
+
+makeOutbreak
+  :: Int
+  -> ( Acc (Vector SIRPopulation)
+     , Acc (Vector SIRPopulation) -> Acc (Vector SIRPopulation)
+     )
+makeOutbreak nAirports = (populations, stepOutbreak transmissions recoveries quarantines flows)
+  where
+    transmissions = use . fromList (Z :. nAirports) $ P.repeat 0.1
+    recoveries    = use . fromList (Z :. nAirports) $ P.repeat 0.1
+    quarantines   = use . fromList (Z :. nAirports) $ P.repeat 0.5
+    flows         = use . fromList (Z :. nAirports :. nAirports) $ P.cycle [1..nAirports]
+    susceptible   = use . fromList (Z :. nAirports) $ P.repeat 10000
+    other         = use . fromList (Z :. nAirports) $ P.repeat 100
+    populations   = zip3 susceptible other other
+
+
+stepOutbreak
+  :: Acc (Vector TransmissionRate)
+  -> Acc (Vector RecoveryRate)
+  -> Acc (Vector QuarantineRate)
+  -> Acc (Array DIM2 PassengerFlow)
+  -> Acc (Vector SIRPopulation)
+  -> Acc (Vector SIRPopulation)
+stepOutbreak transmissions recoveries quarantines flows populations =
+  zip3 susceptible' infected' recovered'
+  where
+    (susceptible, infected, recovered) = unzip3 populations
+    totals = zipWith3 (\s i r -> s + i + r) susceptible infected recovered
+    --
+    newlyInfected :: Acc (Vector InfectedPopulation)
+    newlyInfected = zipWith4 infect transmissions susceptible infected totals
+    infect :: Exp TransmissionRate
+           -> Exp SusceptiblePopulation
+           -> Exp InfectedPopulation
+           -> Exp RecoveredPopulation
+           -> Exp InfectedPopulation
+    infect rate s i n = floor $ (rate * fromIntegral i * fromIntegral s)/(fromIntegral n)
+    --
+    newlyRecovered :: Acc (Vector RecoveredPopulation)
+    newlyRecovered = zipWith recover recoveries infected
+    recover rate i = floor $ rate * fromIntegral i
+    --
+    (quarantined, notQuarantined) = unzip $ zipWith quarantine iArrivals quarantines
+    quarantine :: Exp InfectedPopulation
+               -> Exp QuarantineRate
+               -> Exp (RecoveredPopulation, InfectedPopulation)
+    quarantine i rate = let q = floor $ rate * fromIntegral i in lift (q, i - q)
+    --
+    proportional :: Exp Int -> Exp Int -> Exp Int -> Exp Int
+    proportional compartment n flow = floor passengers
+      where
+        passengers :: Exp Float
+        passengers = (fromIntegral compartment / fromIntegral n) * fromIntegral flow
+    --
+    arrivals     = sum flows
+    --
+    sArrivals    = zipWith3 proportional susceptible totals arrivals
+    iArrivals    = zipWith3 proportional infected    totals arrivals
+    rArrivals    = zipWith3 proportional recovered   totals arrivals
+    --
+    departures   = sum . transpose $ flows
+    --
+    sDepartures  = zipWith3 proportional susceptible totals departures
+    iDepartures  = zipWith3 proportional infected    totals departures
+    rDepartures  = zipWith3 proportional recovered   totals departures
+    --
+    susceptible' = zipWith4 stepS susceptible newlyInfected sArrivals sDepartures
+    stepS s newi a d = s - newi + a - d
+    --
+    infected'    = zipWith5 stepI infected newlyInfected newlyRecovered notQuarantined iDepartures
+    stepI i newi newr notq d = i + newi - newr + notq - d
+    --
+    recovered'   = zipWith5 stepR recovered newlyRecovered rArrivals rDepartures quarantined
+    stepR r newr a d q = r + newr + a - d + q
+
