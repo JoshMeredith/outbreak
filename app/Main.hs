@@ -26,28 +26,36 @@ type RPop = Int
 
 
 globalAirports :: Int
-globalAirports = 3000
+globalAirports = 3200
 
 maxSteps :: Int
-maxSteps = 10
+maxSteps = 50
 
 
 main = defaultMain
-         [ bench "CPU" $ whnf go population
---          , bench "PTX" $ whnf (PTX.run . outbreakN) population
+         [ bench "CPU/iterate" $ whnf (\p -> P.iterate goC p P.!! maxSteps) population
+         , bench "CPU/acc"     $ whnf (CPU.runN outbreakN) population
+         , bench "PTX/iterate" $ whnf (\p -> P.iterate goP p P.!! maxSteps) population
+         , bench "PTX/acc"     $ whnf (PTX.runN outbreakN) population
          ]
 -- main = P.print . CPU.run . sums . outbreak $ population
   where
     (population, outbreak) = makeOutbreak globalAirports
 
-    !go = CPU.runN outbreakN
+    !goP  = PTX.runN outbreak
+    !goC  = CPU.runN outbreak
+    steps = P.iterate go population
+
+    final = steps P.!! maxSteps
+
 
     outbreakN :: Acc (Vector SPop, Vector IPop, Vector RPop)
               -> Acc (Vector SPop, Vector IPop, Vector RPop)
     outbreakN = aiterate (constant maxSteps) outbreak
-    sums vs =
-      let (xs, ys, zs) = unlift vs
-      in lift (sum $ flatten xs, sum $ flatten ys, sum $ flatten zs)
+
+    -- sums vs =
+      -- let (xs, ys, zs) = unlift vs
+      -- in lift (sum $ flatten xs, sum $ flatten ys, sum $ flatten zs)
 
 
 aiterate
@@ -118,7 +126,7 @@ stepOutbreak transmissions recoveries quarantines arrivals departures population
     quarantine :: Exp IPop
                -> Exp QuarantineRate
                -> Exp (RPop, IPop)
-    quarantine i rate = let q = floor $ rate * fromIntegral i in lift (q, i - q)
+    quarantine i rate = let q = ceiling $ rate * fromIntegral i in lift (q, i - q)
     --
     proportional :: Exp Int -> Exp Int -> Exp Int -> Exp Int
     proportional compartment n flow = floor passengers
