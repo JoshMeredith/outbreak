@@ -35,35 +35,14 @@ resolver: lts-11.0
 # A package marked 'extra-dep: true' will only be built if demanded by a
 # non-dependency (i.e. a user package), and its test suites and benchmarks
 # will not be run. This is useful for tweaking upstream packages.
-packages:
-  - .
-  - location:
-      git: https://github.com/tmcdonell/accelerate.git
-      commit: HEAD
-    extra-dep: true
-  - location:
-      git: https://github.com/tmcdonell/accelerate-llvm.git
-      commit: HEAD
-    extra-dep: true
-    subdirs:
-    - accelerate-llvm
-    - accelerate-llvm-native
-    - accelerate-llvm-ptx
 
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
-# extra-deps: []
+extra-deps:
+- 'accelerate-1.1.0.0'
+- 'accelerate-llvm-1.1.0.0'
 
 # Override default flag values for local packages and extra-deps
-flags: 
-  accelerate:
-    debug: true
-  accelerate-llvm:
-    debug: true
-  accelerate-llvm-native:
-    debug: true
-  accelerate-llvm-ptx:
-    debug: true
 
 # Extra package databases containing global packages
 # extra-package-dbs: []
