@@ -26,6 +26,7 @@ type PassengerFlow = Int
 type SPop = Int
 type IPop = Int
 type RPop = Int
+type SIRs = (Vector SPop, Vector IPop, Vector RPop)
 
 
 globalAirports :: Int
@@ -149,20 +150,24 @@ proportional compartment n flow = floor passengers
 
 
 travelFlows
-  :: (forall a. Acc a -> a)              -- Run function for precomputation
-  -> Acc (Array DIM2 PassengerFlow)      -- Flows data matrix, departure major
-  -> Acc (Vector  (SPop, IPop, RPop))    -- Populations in each compartment for each city
-  -> Acc (Vector ((SPop, IPop, RPop)     -- Arrival   flows for each city
-                 ,(SPop, IPop, RPop)))   -- Departure flows for each city
-travelFlows run flows populations = zip aFlows dFlows
+  :: (forall a. (Arrays a) => Acc a -> a)            -- Run function for precomputation
+  -> Acc  (Array DIM2 PassengerFlow)                 -- Flows data matrix, departure major
+  -> Acc  (Vector SPop, Vector IPop, Vector RPop)    -- Populations in each compartment for each city
+  -> ( Acc (Vector SPop, Vector IPop, Vector RPop)   -- Arrival   flows for each city
+     , Acc (Vector SPop, Vector IPop, Vector RPop))  -- Departure flows for each city
+travelFlows run flows populations = (aFlows, dFlows)
   where
     flowsT = use . run $ transpose flows
     depts  = use . run $ sum       flows
-    coeffs = map goX populations
-    aFlows = arrivals   flowsT coeffs
-    dFlows = departures depts  coeffs
+    arivs  = use . run $ sum       flowsT
     --
-    goX (unlift -> (s :: Exp Int, i :: Exp Int, r :: Exp Int)) = lift (ix, rx)
+    (ss, is, rs) = unlift populations
+    --
+    coeffs = lift . unzip $ zipWith3 goX ss is rs
+    aFlows = arrivals   flowsT arivs coeffs
+    dFlows = departures depts        coeffs
+    --
+    goX s i r = lift (ix, rx)
       where
         n  = fromIntegral (s + i + r)
         ix = fromIntegral i / n
@@ -171,29 +176,34 @@ travelFlows run flows populations = zip aFlows dFlows
 
 departures
   :: Acc (Vector PassengerFlow)
-  -> Acc (Vector (Float, Float))
-  -> Acc (Vector (SPop, IPop, RPop))
-departures = zipWith go
+  -> Acc (Vector Float, Vector Float)
+  -> Acc (Vector SPop, Vector IPop, Vector RPop)
+departures flows coeffs = lift (ss, is, rs)
   where
-    go :: Exp PassengerFlow -> Exp (Float, Float) -> Exp (SPop, IPop, RPop)
-    go flow (unlift -> (ix :: Exp Float, rx :: Exp Float)) = lift (s, i, r)
-      where
-        s = flow - (i + r)
-        i = ceiling $ ix * fromIntegral flow
-        r = ceiling $ rx * fromIntegral flow
+    (ixs, rxs) = unlift coeffs
+    --
+    go x f = ceiling $ x * f
+    --
+    fs = map fromIntegral flows
+    --
+    is = zipWith go ixs fs
+    rs = zipWith go rxs fs
+    --
+    ss = zipWith3 (((-) .) . (-)) flows is rs 
 
 
 arrivals
   :: Acc (Array DIM2 PassengerFlow)    -- Flows data matrix, arrival major
-  -> Acc (Vector (Float, Float))
-  -> Acc (Vector (SPop, IPop, RPop))
-arrivals flows coeffs = zip3 (sum sFlows) (sum iFlows) (sum rFlows)
+  -> Acc (Vector PassengerFlow)
+  -> Acc (Vector Float, Vector Float)
+  -> Acc (Vector SPop, Vector IPop, Vector RPop)
+arrivals flows totals coeffs = lift (sFlows, iFlows, rFlows)
   where
-    sFlows = zipWith3 (((-) .) . (-)) flows iFlows rFlows
-    iFlows = imap (go ixs) flows
-    rFlows = imap (go rxs) flows
+    sFlows = zipWith3 (((-) .) . (-)) totals iFlows rFlows
+    iFlows = sum $ imap (go ixs) flows
+    rFlows = sum $ imap (go rxs) flows
     --
-    (ixs, rxs) = unzip coeffs
+    (ixs, rxs) :: (Acc (Vector Float), Acc (Vector Float)) = unlift coeffs
     --
     go xs (indexHead -> from) flow = ceiling $ fromIntegral flow * (xs !! from)
 
