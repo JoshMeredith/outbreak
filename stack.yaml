@@ -15,7 +15,7 @@
 # resolver:
 #  name: custom-snapshot
 #  location: "./custom-snapshot.yaml"
-resolver: lts-11.0
+resolver: nightly-2018-04-01
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -39,10 +39,24 @@ resolver: lts-11.0
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
-- 'accelerate-1.1.0.0'
-- 'accelerate-llvm-1.1.0.0'
+- 'accelerate-1.2.0.0'
+- 'accelerate-llvm-1.2.0.0'
+- 'accelerate-llvm-native-1.2.0.0'
+- 'accelerate-llvm-ptx-1.2.0.0'
+- 'cuda-0.9.0.3'
+- 'nvvm-0.8.0.3'
+- 'tasty-hedgehog-0.2.0.0'
 
 # Override default flag values for local packages and extra-deps
+flags:  
+  accelerate: 
+    debug: true 
+  accelerate-llvm: 
+    debug: true 
+  accelerate-llvm-native: 
+    debug: true 
+  accelerate-llvm-ptx: 
+    debug: true 
 
 # Extra package databases containing global packages
 # extra-package-dbs: []
